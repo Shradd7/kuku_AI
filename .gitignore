@@ -1,0 +1,23 @@
+# --- secrets: API keys live in .env, never commit it
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# --- python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Kuku's input pack is confidential: never commit scripts, or outputs/labels that quote them
+data/
+*.txt
+!requirements.txt
+*.zip
+outputs*/
+labels.csv
+
+# --- personal notes, not part of the tool
+YOUR_NEXT_STEPS.md
+VIDEO_SCRIPT.md
