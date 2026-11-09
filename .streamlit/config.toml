@@ -1,15 +1,15 @@
-# Kuku TV palette (from kukutv.app): black, white, orange #E25506, gold #FFBB10, Figtree
+# Kuku FM palette (from kukufm.com): black, white, red #EB0000 for actions, gold #FFBB10, Figtree
 [theme]
 base = "dark"
-primaryColor = "#E25506"
+primaryColor = "#EB0000"
 backgroundColor = "#000000"
-secondaryBackgroundColor = "#1A1A1A"
+secondaryBackgroundColor = "#141414"
 textColor = "#FFFFFF"
-borderColor = "#2A2A2A"
-linkColor = "#FF641C"
+borderColor = "#262626"
+linkColor = "#FFFFFF"
 font = "sans-serif"   # Figtree is loaded by app.py CSS
 codeFont = "monospace"
-chartCategoricalColors = ["#E25506", "#FFBB10", "#9CA3AF"]
+chartCategoricalColors = ["#EB0000", "#FFBB10", "#7C7C85"]
 
 [server]
 headless = true

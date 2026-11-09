@@ -3,7 +3,8 @@
 Reads a microdrama's timestamped screenplays and returns ranked 20-60s promo cuts:
 the episode and start/end of every segment, the hook, the cliffhanger, why it works, plus a quality report.
 
-On a 50-episode show: **15 model calls, about 2.5 minutes, $0 on Gemini's free tier.**
+On the 50-episode input pack: **115 promos, all 5 hand-picked reference promos matched (4 in the top 20), 15 model calls,
+about 6 minutes, $0 on Gemini's free tier.**
 
 ## Run it
 ```bash
@@ -23,7 +24,8 @@ streamlit run app.py            # UI: view results, or upload a .zip of a new sh
 |---|---|---|
 | `--batch N` | 1 | episodes per LLM call. **5 recommended**: about 15 calls per show, fits free daily quotas |
 | `--workers N` | 1 | calls in parallel (paid keys) |
-| `--prompt v1/v2/v3` | v3 | prompt version (see below) |
+| `--prompt v1..v4` | v4 | prompt version (see below) |
+| `--assembly v3/v3.1` | v3.1 | cut rules (v3.1: hooks start on the action, not "Ahhh!"; prefer continuous clips) |
 | `--provider / --model` | from `.env` | override the model |
 | `--labels file.csv` | labels.csv | hand-picked promos (`episode,start_sec,end_sec,note`) to grade against |
 
@@ -42,7 +44,7 @@ scripts -> parse (code) -> find hook & cliffhanger lines (LLM, 5 episodes/call)
   (hook beat + lead-in to the cliffhanger), `cross` (episode N hook + N+1 cliffhanger).
 - The judge sees only the clip's own lines, which tests "makes sense on its own". The series arc is given to it
   **only** for spoiler scoring.
-- Rank = 0.35 hook + 0.35 cliffhanger + 0.20 standalone + 0.10 (10 - spoiler), +0.4 for episodes 1-10.
+- Rank = 0.35 hook + 0.35 cliffhanger + 0.20 standalone + 0.10 (10 - spoiler), +0.4 for episodes 1-10, -0.6 for a montage.
   "Post first" = top 10, at most one per episode.
 - Robustness: retries with backoff, a fallback model, a failed batch is skipped (a rerun fills it in), list-wrapped JSON
   is normalised, every response is cached (a rerun never pays twice).
@@ -53,6 +55,7 @@ scripts -> parse (code) -> find hook & cliffhanger lines (LLM, 5 episodes/call)
 | v1 | basic instructions | first version |
 | v2 | scoring rubric with anchors, 6 **invented** good/bad examples, series arc for spoilers | consistent scores; examples are not from the show, so they generalise and don't leak the evaluation set |
 | v3 | exact counts per episode, "most cliffhangers must be mid-episode", hooks point at the action not "Ah!" | v2 with 10 episodes per call returned 1 moment per episode and 96% of promos were just episode endings; v3 brought that to 21% |
+| v4 | per-episode output enforced by a **JSON schema** (Gemini): exactly 3 hooks + 3 cliffhangers per episode | the model ignored v3's "exactly 3" for 42/50 episodes; the schema made it 50/50, and hand-picked matches went from 2/5 to 5/5 |
 
 ## Outputs (`outputs/`)
 | File | What |

@@ -9,6 +9,26 @@ Cut points snap to block boundaries so a promo never starts or ends mid-line of 
 from dataclasses import dataclass, field
 
 MIN_LEN, MAX_LEN, TARGET = 20.0, 60.0, 42.0
+ASSEMBLY = "v3.1"   # set by run.py --assembly. v3 = original rules; v3.1 = hook fix + prefer continuous clips
+CROSS_PRE_PENALTY = {"v3": 1, "v3.1": 3}   # how much a cross-episode montage is handicapped before judging
+
+
+def is_bare_exclamation(b):
+    """'Ahhh!', 'Alexander!', 'Dear God.': loud but meaningless to a stranger."""
+    return b.kind == "DIALOGUE" and len(b.text.split()) <= 3
+
+
+def upgrade_hook(ep, h):
+    """v3.1: if the hook is a bare exclamation, start on the ACTION/SOUND line that shows what caused it
+    (the slap, the wound, the fire) instead, if one starts within 3s before it."""
+    hb = h["block"]
+    if ASSEMBLY != "v3.1" or not is_bare_exclamation(hb):
+        return h
+    near = [b for b in ep.blocks if b.kind in ("ACTION", "SOUND") and hb.start - 3.0 <= b.start <= hb.start + 0.5]
+    if not near:
+        return h
+    best = max(near, key=lambda b: b.start)          # the closest cause before the scream
+    return dict(h, block=best, hook_fixed_from=hb.id)
 
 
 @dataclass
@@ -70,7 +90,8 @@ def hook_beat(ep, hb):
 
 def build_for_episode(ep, cands, next_ep=None, next_cands=None, per_ep=4):
     promos = []
-    hooks, cliffs = cands["hooks"], cands["cliffhangers"]
+    hooks = [upgrade_hook(ep, h) for h in cands["hooks"]]
+    cliffs = cands["cliffhangers"]
     for h in hooks:
         hb = h["block"]
         for c in cliffs:
@@ -94,11 +115,12 @@ def build_for_episode(ep, cands, next_ep=None, next_cands=None, per_ep=4):
     if next_ep is not None and next_cands and hooks and next_cands["cliffhangers"]:
         h = max(hooks, key=lambda x: x["score"])
         c = max(next_cands["cliffhangers"], key=lambda x: x["score"])
+        pen = CROSS_PRE_PENALTY.get(ASSEMBLY, 1)
         seg1 = hook_beat(ep, h["block"])
         e = snap_end(next_ep, c["block"].end)
         seg2 = Segment(next_ep.number, lead_in_start(next_ep, e, TARGET - seg1.dur), e)
         if MIN_LEN <= seg1.dur + seg2.dur <= MAX_LEN and seg2.dur >= 8:
-            promos.append(Promo("", "cross", [seg1, seg2], h, c, h["score"] + c["score"] - 1))
+            promos.append(Promo("", "cross", [seg1, seg2], h, c, h["score"] + c["score"] - pen))
     promos = dedupe(sorted(promos, key=lambda p: -p.pre_score))[:per_ep]
     for i, p in enumerate(promos, 1):
         p.pid = f"P{ep.number:02d}-{i}"

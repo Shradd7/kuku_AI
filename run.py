@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from promo.parse import parse_folder, validate, fmt
 from promo.llm import LLM
+import promo.assemble as asm_mod
 import promo.candidates as cand_mod
 from promo.candidates import find_candidates, find_candidates_batch
 from promo.assemble import build_for_episode, dedupe
@@ -46,9 +47,12 @@ def main():
     ap.add_argument("--model", default=None)
     ap.add_argument("--labels", default="labels.csv", help="optional hand-picked promos to compare with")
     ap.add_argument("--top", type=int, default=10)
-    ap.add_argument("--prompt", default="v3", choices=["v1", "v2", "v3"],
+    ap.add_argument("--assembly", default="v3.1", choices=["v3", "v3.1"],
+                    help="v3.1 = start bare-exclamation hooks on the action line + prefer continuous clips")
+    ap.add_argument("--prompt", default="v4", choices=["v1", "v2", "v3", "v4"],
                     help="v1 original; v2 + rubric, invented examples, series arc for spoilers; "
-                         "v3 + exact counts and a mid-episode cliffhanger rule")
+                         "v3 + exact counts and a mid-episode cliffhanger rule; "
+                         "v4 + per-episode output that Gemini is forced to follow (JSON schema)")
     ap.add_argument("--workers", type=int, default=1, help="calls run in parallel (e.g. 4)")
     ap.add_argument("--batch", type=int, default=1,
                     help="episodes per LLM call (e.g. 5): ~15 calls per 50-episode show, fits free daily quotas")
@@ -59,6 +63,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     show = a.show or Path(a.input).name
     cand_mod.PROMPT_VERSION = a.prompt
+    asm_mod.ASSEMBLY = a.assembly
     eps = parse_folder(a.input)
     issues = validate(eps)
     keep = ep_range(a.episodes, [e.number for e in eps])
@@ -67,7 +72,7 @@ def main():
     by_num = {e.number: e for e in eps}
     llm = LLM(provider=a.provider, model=a.model, cache_dir=out / "raw_llm")
     print(f"[1/5] parsed {len(eps)} episodes, {sum(len(e.blocks) for e in eps)} lines; "
-          f"parse issues: {len(issues)} | model: {llm.label} | prompt: {a.prompt}")
+          f"parse issues: {len(issues)} | model: {llm.label} | prompt: {a.prompt} | assembly: {a.assembly}")
 
     cands, stats = {}, {}
 
@@ -161,7 +166,7 @@ def main():
         indent=1, ensure_ascii=False), encoding="utf-8")
 
     run = {"show": show, "input": str(Path(a.input).resolve()), "model": llm.label, "episodes": len(eps),
-           "batch": a.batch, "workers": a.workers, "prompt": a.prompt, "seconds": round(time.time() - t0, 1),
+           "batch": a.batch, "workers": a.workers, "prompt": a.prompt, "assembly": a.assembly, "seconds": round(time.time() - t0, 1),
            "live_llm_calls": llm.calls, "cached_llm_calls": llm.cached,
            "tokens_in": llm.tokens_in, "tokens_out": llm.tokens_out, "parse_issues": issues,
            "qc": qc, "labels": lab}
@@ -173,6 +178,9 @@ def main():
            f"- Duration 20-60s: {q['dur_ok']}%",
            f"- Clean cuts (no cut inside a dialogue line): {q['clean_cuts']}%",
            f"- Hook line starts in first 3s: {q['hook_in_first_3s']}%",
+           f"- Hooks that are a bare exclamation (<=3 words, e.g. 'Ahhh!'): {q['bare_exclamation_hooks']}% "
+           f"(fixed to the action line: {qc['hooks_fixed']})",
+           f"- Cross-episode montages: {q['cross_share']}%",
            f"- Ends on the cliffhanger line: {q['ends_on_cliff_line']}%",
            f"- Ends at the episode's own ending (within 3s): {q['ends_at_episode_end']}%  "
            "(high = tool mostly re-finds the writer's designed cliffhanger)",

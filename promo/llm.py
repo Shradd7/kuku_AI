@@ -90,8 +90,9 @@ class LLM:
     def label(self):
         return f"{self.provider}:{self.model}"
 
-    def json(self, prompt: str, tag: str = "call", system: str = "") -> dict:
-        key = hashlib.sha256(f"{self.label}\n{system}\n{prompt}".encode()).hexdigest()[:16]
+    def json(self, prompt: str, tag: str = "call", system: str = "", schema: dict = None) -> dict:
+        extra = ("\n" + json.dumps(schema, sort_keys=True)) if schema else ""
+        key = hashlib.sha256(f"{self.label}\n{system}\n{prompt}{extra}".encode()).hexdigest()[:16]
         path = self.cache / f"{tag}__{key}.json"
         if path.exists():
             with self.lock:
@@ -104,7 +105,7 @@ class LLM:
             # after 2 overload/timeout failures, switch to the fallback model for this call
             model = fallback if (fallback and attempt >= 2) else primary
             try:
-                text, usage = self._call(prompt, system, model)
+                text, usage = self._call(prompt, system, model, schema)
                 usage["model_used"] = model
                 parsed = extract_json(text)
                 with self.lock:
@@ -134,16 +135,16 @@ class LLM:
         raise RuntimeError(f"LLM call failed after retries: {last_err}")
 
     # ---- providers -------------------------------------------------------
-    def _call(self, prompt, system, model):
+    def _call(self, prompt, system, model, schema=None):
         if self.provider == "gemini":
-            return self._gemini(prompt, system, model)
+            return self._gemini(prompt, system, model, schema)
         if self.provider == "openai":
             return self._openai(prompt, system, model)
         if self.provider == "anthropic":
             return self._anthropic(prompt, system, model)
         raise ValueError(f"provider '{self.provider}' has no live API (offline uses rules)")
 
-    def _gemini(self, prompt, system, model):
+    def _gemini(self, prompt, system, model, schema=None):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         if model.startswith("gemma"):
             # Gemma (open model on the Gemini API) has no system instruction, JSON mode or thinking config:
@@ -156,6 +157,8 @@ class LLM:
                     "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
             if system:
                 body["systemInstruction"] = {"parts": [{"text": system}]}
+            if schema:   # v4: Gemini must produce exactly this shape
+                body["generationConfig"]["responseSchema"] = schema
         if os.getenv("GEMINI_THINKING") and not model.startswith("gemma"):   # e.g. low: faster, cheaper; picking hooks needs little reasoning
             body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": os.environ["GEMINI_THINKING"]}
         r = requests.post(url, params={"key": os.environ["GEMINI_API_KEY"]}, json=body, timeout=300)

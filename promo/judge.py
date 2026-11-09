@@ -3,6 +3,7 @@
 The judge sees ONLY the lines inside the promo (no logline, no backstory), so its
 "makes sense on its own" score is a real cold-viewer test.
 """
+from . import assemble as A
 from . import candidates as C
 from .assemble import promo_blocks
 from .candidates import render
@@ -78,7 +79,7 @@ def judge_episode(eps_by_num, promos, llm, arc=""):
         return offline_judge(eps_by_num, promos)
     ep_tag = promos[0].pid.split("-")[0] + ("-" + promos[-1].pid.split("-")[0] if len({p.pid.split("-")[0] for p in promos}) > 1 else "")
     extras = JUDGE_V2.replace("{rubric}", C.RUBRIC).replace("{arc}", arc or "(not provided)") \
-        if C.PROMPT_VERSION in ("v2", "v3") else ""
+        if C.PROMPT_VERSION in ("v2", "v3", "v4") else ""
     prompt = JUDGE_PROMPT.format(n=len(promos), clips="\n".join(clip_text(eps_by_num, p) for p in promos),
                                  extras=extras)
     try:
@@ -104,6 +105,8 @@ def final_score(p):
          + W["standalone"] * num(j.get("standalone")) + W["spoiler"] * (10 - num(j.get("spoiler"), 3)))
     if p.segments[0].episode <= EARLY_EP_CUTOFF:
         s += EARLY_EP_BONUS
+    if A.ASSEMBLY == "v3.1":   # the brief: a promo is "usually one continuous stretch"; montages cost edit time
+        s -= {"single": 0.0, "jump": 0.2, "cross": 0.6}.get(p.shape, 0.0)
     return round(s, 2)
 
 

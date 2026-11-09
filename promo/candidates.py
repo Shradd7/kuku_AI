@@ -43,7 +43,42 @@ V3_RULES = """HARD RULES (v3):
   shows it, not to an exclamation like "Ah!" or a name being shouted."""
 
 
+V4_FORMAT = """OUTPUT FORMAT (v4): return one entry PER EPISODE, in order, each with exactly 3 hooks and exactly 3
+cliffhangers from THAT episode only:
+{"episodes": [{"episode": 1, "hooks": [3 items], "cliffhangers": [3 items]}, ...]}
+Each hook: {"line_id", "score", "moment", "why", "needs_context"}.
+Each cliffhanger: {"line_id", "score", "moment", "open_question", "needs_context"}."""
+
+
+def batch_schema(n_eps):
+    """JSON schema Gemini enforces while generating: n episodes x exactly 3 hooks + 3 cliffhangers."""
+    item = {"type": "OBJECT", "properties": {
+        "line_id": {"type": "STRING"}, "score": {"type": "NUMBER"}, "moment": {"type": "STRING"},
+        "why": {"type": "STRING"}, "open_question": {"type": "STRING"}, "needs_context": {"type": "BOOLEAN"}},
+        "required": ["line_id", "score", "moment"]}
+    three = {"type": "ARRAY", "items": item, "minItems": 3, "maxItems": 3}
+    ep = {"type": "OBJECT", "properties": {"episode": {"type": "INTEGER"}, "hooks": three, "cliffhangers": three},
+          "required": ["episode", "hooks", "cliffhangers"]}
+    return {"type": "OBJECT", "properties": {"episodes": {"type": "ARRAY", "items": ep,
+                                                          "minItems": n_eps, "maxItems": n_eps}},
+            "required": ["episodes"]}
+
+
+def flatten_episodes(raw):
+    """v4 replies are {"episodes":[{hooks, cliffhangers}]}; turn into flat hooks/cliffhangers lists."""
+    if isinstance(raw, dict) and isinstance(raw.get("episodes"), list):
+        flat = {"hooks": [], "cliffhangers": []}
+        for e in raw["episodes"]:
+            if isinstance(e, dict):
+                flat["hooks"] += e.get("hooks") or []
+                flat["cliffhangers"] += e.get("cliffhangers") or []
+        return flat
+    return raw
+
+
 def v2_block():
+    if PROMPT_VERSION == "v4":
+        return "\n" + RUBRIC + "\n\n" + EXAMPLES + "\n\n" + V3_RULES + "\n\n" + V4_FORMAT + "\n"
     if PROMPT_VERSION == "v2":
         return "\n" + RUBRIC + "\n\n" + EXAMPLES + "\n"
     if PROMPT_VERSION == "v3":
@@ -203,8 +238,12 @@ def find_candidates_batch(batch, llm, show, prev_logline=""):
         scripts="\n\n".join(f"=== EPISODE {e.number} ===\n{render(e.blocks)}" for e in batch))
     tag = f"candB_E{batch[0].number:02d}-E{batch[-1].number:02d}"
     out = {e.number: ({"hooks": [], "cliffhangers": []}, {"returned": 0, "bad_id": 0, "failed": 0}) for e in batch}
+    if PROMPT_VERSION == "v4":   # the generic example block below asks for a flat list; v4 overrides it
+        prompt = prompt.replace("Return ONE JSON object exactly like:", "Ignore this older flat example; use the OUTPUT FORMAT (v4) above:")
     try:
-        raw = llm.json(prompt, tag=tag, system=SYSTEM)
+        schema = batch_schema(len(batch)) if PROMPT_VERSION == "v4" and llm.provider == "gemini" \
+            and not llm.model.startswith("gemma") else None
+        raw = flatten_episodes(llm.json(prompt, tag=tag, system=SYSTEM, schema=schema))
     except RuntimeError as err:
         print(f"  [skip] {tag}: {str(err)[:160]}", flush=True)
         for e in batch:

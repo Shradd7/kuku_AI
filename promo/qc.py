@@ -12,11 +12,16 @@ def mid_dialogue(ep, t, edge):
 
 def rule_checks(eps_by_num, promos, cand_stats):
     n = len(promos) or 1
-    res = {"promos": len(promos), "dur_ok": 0, "clean_cuts": 0, "hook_in_first_3s": 0,
+    res = {"promos": len(promos), "bare_exclamation_hooks": 0, "hooks_fixed": 0, "cross_share": 0, "dur_ok": 0, "clean_cuts": 0, "hook_in_first_3s": 0,
            "ends_on_cliff_line": 0, "ends_at_episode_end": 0, "judge_missing": 0,
            "shapes": {}, "problems": []}
     for p in promos:
         res["shapes"][p.shape] = res["shapes"].get(p.shape, 0) + 1
+        hb0 = p.hook["block"]
+        if hb0.kind == "DIALOGUE" and len(hb0.text.split()) <= 3:
+            res["bare_exclamation_hooks"] += 1
+        res["hooks_fixed"] += bool(p.hook.get("hook_fixed_from"))
+        res["cross_share"] += p.shape == "cross"
         if 20 <= p.duration <= 60:
             res["dur_ok"] += 1
         else:
@@ -45,7 +50,8 @@ def rule_checks(eps_by_num, promos, cand_stats):
     res["llm_ids_returned"], res["llm_bad_ids"] = ret, bad
     res["failed_episodes"] = sorted(n for n, s in cand_stats.items() if s.get("failed"))
     res["pct"] = {k: round(100 * res[k] / n, 1) for k in
-                  ("dur_ok", "clean_cuts", "hook_in_first_3s", "ends_on_cliff_line", "ends_at_episode_end")}
+                  ("dur_ok", "clean_cuts", "hook_in_first_3s", "ends_on_cliff_line", "ends_at_episode_end",
+                            "bare_exclamation_hooks", "cross_share")}
     return res
 
 
