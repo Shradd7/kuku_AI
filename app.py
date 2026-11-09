@@ -5,6 +5,7 @@ Run    : upload a .zip of episode screenplays and run the pipeline with the mode
 """
 import html
 import json
+import os
 import re
 import subprocess
 import sys
@@ -132,7 +133,23 @@ def load_episodes(input_dir):
 
 
 def find_runs():
-    return sorted({str(p.parent) for p in ROOT.glob("outputs*/promos.csv")}, key=lambda p: Path(p).name)
+    roots = [ROOT] + [Path(d) for d in st.session_state.get("upload_dirs", [])]
+    found = {str(p.parent) for r in roots for p in r.glob("**/promos.csv")}
+    return sorted(found, key=lambda p: Path(p).name)
+
+
+def unpack(upload, kind):
+    """Unzip an uploaded file into a temp folder kept for this browser session only."""
+    key = f"{kind}:{upload.name}:{upload.size}"
+    done = st.session_state.setdefault("unpacked", {})
+    if key not in done:
+        d = Path(tempfile.mkdtemp(prefix=f"pf_{kind}_"))
+        with zipfile.ZipFile(upload) as z:
+            z.extractall(d)
+        done[key] = str(d)
+        if kind == "results":
+            st.session_state.setdefault("upload_dirs", []).append(str(d))
+    return done[key]
 
 
 def clip_html(eps, segs, hook_id, cliff_id):
@@ -185,55 +202,83 @@ mode = st.sidebar.radio("Mode", ["View results", "Run on a new show"], label_vis
 # ---------------------------------------------------------------- run mode
 if mode == "Run on a new show":
     st.markdown("<div class='t-eyebrow'>New show</div><div class='t-title'>Find promos in a new show</div>"
-                "<div class='t-body'>Upload a .zip with one screenplay .txt per episode. "
-                "The model comes from your .env file.</div>", unsafe_allow_html=True)
+                "<div class='t-body'>Upload a .zip with one screenplay .txt per episode, pick a model and paste its "
+                "API key. The key is used for this run only and never saved.</div>", unsafe_allow_html=True)
     st.write("")
     up = st.file_uploader("Screenplays (.zip)", type="zip")
     c1, c2, c3 = st.columns(3)
-    provider = c1.selectbox("Provider", ["From .env", "gemini", "openai", "anthropic", "offline"])
-    model = c2.text_input("Model", "", placeholder="From .env")
+    has_env = (ROOT / ".env").exists()
+    opts = (["From .env"] if has_env else []) + ["gemini", "anthropic", "openai", "offline"]
+    provider = c1.selectbox("Provider", opts, help="offline = rules baseline, no key needed")
+    model = c2.text_input("Model", "", placeholder="From .env" if has_env else "e.g. gemini-flash-lite-latest")
     eps_range = c3.text_input("Episodes", "", placeholder="All, or e.g. 1-5")
+    api_key = ""
+    if provider in ("gemini", "anthropic", "openai"):
+        api_key = st.text_input("API key", type="password",
+                                help="Used for this run only. It is not saved anywhere.")
+    base_url = st.text_input("Base URL", "", placeholder="https://api.groq.com/openai/v1") if provider == "openai" else ""
     batch = st.slider("Episodes per model call", 1, 10, 5,
                       help="5 keeps a 50-episode show to about 15 calls, inside free daily quotas.")
     st.write("")
-    go = st.button("Find promos", type="primary", disabled=up is None)
+    needs_key = provider in ("gemini", "anthropic", "openai") and not api_key
+    go = st.button("Find promos", type="primary", disabled=up is None or needs_key)
     if up and go:
         work = Path(tempfile.mkdtemp())
         with zipfile.ZipFile(up) as z:
             z.extractall(work / "in")
-        out_dir = ROOT / f"outputs_{re.sub(r'[^A-Za-z0-9]+', '_', Path(up.name).stem)[:30]}"
+        out_dir = Path(tempfile.mkdtemp(prefix="pf_run_")) / f"outputs_{re.sub(r'[^A-Za-z0-9]+', '_', Path(up.name).stem)[:30]}"
         cmd = [sys.executable, "run.py", "--input", str(work / "in"), "--out", str(out_dir),
                "--show", Path(up.name).stem, "--batch", str(batch)]
+        env = os.environ.copy()
         if provider != "From .env":
             cmd += ["--provider", provider]
-        if model:
-            cmd += ["--model", model]
+            env["PROVIDER"] = provider
+            env.setdefault("FALLBACK_MODEL", "")
+        defaults = {"gemini": "gemini-flash-lite-latest", "anthropic": "claude-haiku-5-5"}
+        if model or provider in defaults:
+            cmd += ["--model", model or defaults[provider]]
+        if api_key:   # passed only to this run's process; never written to disk
+            env[{"gemini": "GEMINI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}[provider]] = api_key
+        if base_url:
+            env["OPENAI_BASE_URL"] = base_url
         if eps_range:
             cmd += ["--episodes", eps_range]
         box, lines = st.empty(), []
         with st.spinner("Reading episodes"):
-            p = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            p = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
             for line in p.stdout:
                 lines.append(line.rstrip())
                 box.code("\n".join(lines[-14:]), language=None)
             p.wait()
         if p.returncode == 0:
             load_run.clear()
+            st.session_state.setdefault("upload_dirs", []).append(str(out_dir.parent))
+            st.session_state["last_scripts"] = str(work / "in")
             st.success(f"Done. Open View results and pick “{out_dir.name}”.")
         else:
             st.error("The run stopped. The log above shows why.")
     st.stop()
 
 # ---------------------------------------------------------------- view mode
+with st.sidebar.expander("Open results from a .zip", expanded=not find_runs()):
+    rz = st.file_uploader("Results (.zip)", type="zip", key="rz", label_visibility="collapsed",
+                          help="A zip with one or more run folders (each has promos.csv and run_log.json).")
+    if rz:
+        unpack(rz, "results")
 runs = find_runs()
 if not runs:
-    st.info("No results yet. Use “Run on a new show”, or run run.py first.")
+    st.markdown("<div class='t-eyebrow'>Promo report</div><div class='t-title'>Open a set of results</div>"
+                "<div class='t-body'>Upload a results .zip in the sidebar, or switch to “Run on a new show”. "
+                "Nothing you upload is stored after you close the page.</div>", unsafe_allow_html=True)
     st.stop()
-pref = [i for n in ("outputs_v4_lite", "outputs_v31", "outputs") for i, r in enumerate(runs) if Path(r).name == n]
+pref = [i for n in ("outputs_v4_lite", "01_FINAL_v4_flashlite_50eps", "outputs_v31", "outputs")
+        for i, r in enumerate(runs) if Path(r).name == n]
 run_dir = st.sidebar.selectbox("Results", runs, index=pref[0] if pref else 0, format_func=lambda r: Path(r).name)
 df, log, qc_md = load_run(run_dir)
-with st.sidebar.expander("Script folder"):
-    input_dir = st.text_input("Path", log.get("input", ""), label_visibility="collapsed")
+with st.sidebar.expander("Episode scripts (to show clip text)"):
+    sz = st.file_uploader("Scripts (.zip)", type="zip", key="sz", label_visibility="collapsed")
+    default_dir = log.get("input", "") if Path(str(log.get("input", ""))).exists() else ""
+    input_dir = unpack(sz, "scripts") if sz else st.text_input("Or a folder path", default_dir)
 eps = load_episodes(input_dir) if input_dir else {}
 st.sidebar.markdown(f"<div class='t-small' style='margin-top:24px'>Model {esc(str(log.get('model', '')).split(':')[-1])}"
                     f"<br>Prompt {esc(str(log.get('prompt', 'v1')))} · assembly {esc(str(log.get('assembly', 'v3')))}"
